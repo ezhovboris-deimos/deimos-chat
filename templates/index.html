@@ -36,6 +36,11 @@ body { font: 14px/1.5 -apple-system, sans-serif; background: var(--bg); color: v
 .input-area button { padding: 10px 20px; background: var(--send); color: #fff; border: none; border-radius: 8px; cursor: pointer; }
 .spinner { display: none; text-align: center; padding: 8px; color: var(--send); font-size: 12px; }
 .spinner.show { display: block; }
+.reasoning { margin: 4px 0; border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; background: var(--bg); }
+.reasoning summary { cursor: pointer; font-size: 12px; color: var(--send); }
+.reasoning div { margin-top: 6px; font-size: 12px; opacity: 0.85; }
+.toolbar { display: flex; gap: 4px; padding: 6px 0; flex-wrap: wrap; }
+.toolbar button { padding: 4px 8px; background: var(--accent); color: var(--text); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -57,6 +62,14 @@ body { font: 14px/1.5 -apple-system, sans-serif; background: var(--bg); color: v
 </div>
 <div class="chat" id="messages"><div style="text-align:center;color:#666;margin-top:40px;">Выберите чат или создайте новый</div></div>
 <div class="spinner" id="spinner">⏳ Думаю...</div>
+<div class="toolbar">
+<button onclick="insertMarkdown('**','**')" title="Жирный">B</button>
+<button onclick="insertMarkdown('*','*')" title="Курсив">I</button>
+<button onclick="insertMarkdown('`','`')" title="Код">&lt;/&gt;</button>
+<button onclick="insertMarkdown('```\n','\n```')" title="Блок кода">```</button>
+<button onclick="insertMarkdown('- ','')" title="Список">•</button>
+<button onclick="insertMarkdown('> ','')" title="Цитата">»</button>
+</div>
 <div class="input-area">
 <input id="msg-input" placeholder="Сообщение... (/model, /help, /status)" onkeydown="if(event.key==='Enter')send()">
 <button onclick="send()">➤</button>
@@ -67,21 +80,45 @@ let currentChat=null, currentModel='flash';
 marked.setOptions({breaks:true,gfm:true});
 function toggleTheme(){document.body.classList.toggle('light');localStorage.setItem('theme',document.body.classList.contains('light')?'light':'dark');}
 if(localStorage.getItem('theme')==='light')document.body.classList.add('light');
+
+function formatMsg(parts) {
+    /* Парсинг Reasoning + Ответ. parts.reasoning — текст Reasoning, parts.answer — ответ */
+    let html = '';
+    if (parts.reasoning) {
+        html += '<details class="reasoning"><summary>🧠 Reasoning</summary><div>'
+              + marked.parse(parts.reasoning) + '</div></details>';
+    }
+    html += '<div>' + marked.parse(parts.answer) + '</div>';
+    return html;
+}
+function parseResponse(text) {
+    /* Разбираем вывод Hermes на Reasoning и ответ */
+    let reas = text.match(/┌─\s*Reasoning\s*─+┐\n([\s\S]*?)\n└─/);
+    let ans = text.match(/╭─\s*⚕\s*Hermes\s*─+╮\n([\s\S]*?)\n╰─/);
+    return {
+        reasoning: reas ? reas[1].trim() : null,
+        answer: ans ? ans[1].trim() : text
+    };
+}
+function insertMarkdown(prefix, suffix) {
+    let inp = document.getElementById('msg-input');
+    let s = inp.selectionStart, e = inp.selectionEnd;
+    let t = inp.value, sel = t.substring(s, e);
+    inp.value = t.substring(0, s) + prefix + sel + suffix + t.substring(e);
+    inp.focus(); inp.setSelectionRange(s+prefix.length, s+prefix.length+sel.length);
+}
 async function loadChats(){let r=await fetch('/api/chats');let chats=await r.json();let l=document.getElementById('chat-list');l.innerHTML=chats.map(c=>`<div class="chat-item${c.id===currentChat?' active':''}" onclick="openChat('${c.id}')"><span>${c.title.substring(0,18)}<br><small>${c.model}</small></span><button class="del-btn" onclick="event.stopPropagation();delChat('${c.id}')">✕</button></div>`).join('');}
 function newChat(){let title=prompt('Название чата:','Новый чат');if(!title)return;fetch('/api/chat/new',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title})}).then(r=>r.json()).then(d=>{openChat(d.id);loadChats();});}
-function openChat(cid){currentChat=cid;document.getElementById('chat-title').textContent='Чат '+cid;fetch('/api/chat/'+cid+'/messages').then(r=>r.json()).then(msgs=>{let h=document.getElementById('messages');h.innerHTML=msgs.map(m=>`<div class="msg ${m.role}"><div class="meta">${m.created||''} ${m.role==='assistant'?'<span class="model-tag">'+m.model+'</span>':''}</div><div>${m.role==='assistant'?marked.parse(m.content):m.content}</div></div>`).join('');h.scrollTop=h.scrollHeight;});loadChats();}
+function openChat(cid){currentChat=cid;document.getElementById('chat-title').textContent='Чат '+cid;fetch('/api/chat/'+cid+'/messages').then(r=>r.json()).then(msgs=>{let h=document.getElementById('messages');h.innerHTML=msgs.map(m=>{if(m.role==='assistant'){let p=parseResponse(m.content);return`<div class="msg ai"><div class="meta"><span class="model-tag">${m.model}</span></div>${formatMsg(p)}</div>`;}return`<div class="msg user"><div>${m.content}</div></div>`;}).join('');h.scrollTop=h.scrollHeight;});loadChats();}
 function delChat(cid){if(!confirm('Удалить чат?'))return;fetch('/api/chat/'+cid+'/delete',{method:'POST'}).then(()=>{if(currentChat===cid){currentChat=null;document.getElementById('messages').innerHTML='<div style="text-align:center;color:#666;margin-top:40px;">Выберите чат или создайте новый</div>';document.getElementById('chat-title').textContent='Выберите или создайте чат';}loadChats();});}
 function setModel(m){currentModel=m;}
 async function send(){let inp=document.getElementById('msg-input');let msg=inp.value.trim();if(!msg||!currentChat)return;inp.value='';inp.disabled=true;document.getElementById('spinner').classList.add('show');
 let h=document.getElementById('messages');h.innerHTML+=`<div class="msg user"><div>${msg}</div></div>`;h.scrollTop=h.scrollHeight;
-if(msg.startsWith('/')){
 let r=await fetch('/api/chat/'+currentChat+'/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,model:currentModel})});
-let d=await r.json();h.innerHTML+=`<div class="msg ai"><div class="meta"><span class="model-tag">${d.model}</span></div><div>${marked.parse(d.reply)}</div></div>`;
+let d=await r.json();
+let parts = parseResponse(d.reply);
+h.innerHTML+=`<div class="msg ai"><div class="meta"><span class="model-tag">${d.model}</span></div>${formatMsg(parts)}</div>`;
 if(msg.startsWith('/model ')){let nm=msg.split(' ')[1];if(nm)setModel(nm);document.getElementById('model-select').value=nm;}
-}else{
-let r=await fetch('/api/chat/'+currentChat+'/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,model:currentModel})});
-let d=await r.json();h.innerHTML+=`<div class="msg ai"><div class="meta"><span class="model-tag">${d.model}</span></div><div>${marked.parse(d.reply)}</div></div>`;
-}
 h.scrollTop=h.scrollHeight;inp.disabled=false;document.getElementById('spinner').classList.remove('show');loadChats();
 }
 loadChats();

@@ -32,11 +32,29 @@ def call_hermes(msg: str, model: str = 'flash') -> str:
             env={**env, 'HOME': '/home/deimos'}
         )
         out = r.stdout.strip() or r.stderr.strip() or '...'
-        return out[:8000]
+        # Фильтр: показывать только блок от Hermes (╭─ ⚕ Hermes ─), без Reasoning
+        cleaned = _clean_hermes_output(out)
+        return cleaned[:8000]
     except subprocess.TimeoutExpired:
         return '⏳ Ответ занимает больше 5 минут. Упростите запрос или переключитесь на flash.'
     except Exception as e:
         return f'Ошибка: {e}'
+
+def _clean_hermes_output(text: str) -> str:
+    """Оставляем только блок ╭─ ⚕ Hermes ─ (ответ агента), убираем Reasoning и технический вывод."""
+    import re
+    # Ищем блок Hermes (между ╭─ ⚕ Hermes ─ и ╰─)
+    m = re.search(r'╭─\s*⚕\s*Hermes\s*─+╮\n(.*?)\n╰─', text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    # Если не нашли — отдаём всё что есть после "Initializing agent..."
+    lines = text.split('\n')
+    start = 0
+    for i, line in enumerate(lines):
+        if 'Initializing agent...' in line:
+            start = i + 1
+    body = '\n'.join(lines[start:])
+    return body.strip() or text[:1500]
 
 @app.route('/')
 def index():
