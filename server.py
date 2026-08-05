@@ -27,7 +27,7 @@ def call_hermes(msg: str, model: str = 'flash') -> str:
         r = subprocess.run(
             ['/home/deimos/.hermes/hermes-agent/venv/bin/hermes', 'chat',
              '-q', msg, '-m', f'deepseek-v4-{model}',
-             '--no-restore-cwd', '--reasoning', 'medium'],
+             '--no-restore-cwd', '--safe-mode'],
             capture_output=True, text=True, timeout=300, cwd='/home/deimos',
             env={**env, 'HOME': '/home/deimos'}
         )

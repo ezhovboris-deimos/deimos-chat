@@ -92,9 +92,10 @@ function formatMsg(parts) {
     return html;
 }
 function parseResponse(text) {
-    /* Разбираем вывод Hermes на Reasoning и ответ */
+    /* Разбираем вывод Hermes на Reasoning и ответ. Берем ПОСЛЕДНИЙ блок Hermes. */
     let reas = text.match(/┌─\s*Reasoning\s*─+┐\n([\s\S]*?)\n└─/);
-    let ans = text.match(/╭─\s*⚕\s*Hermes\s*─+╮\n([\s\S]*?)\n╰─/);
+    let ansMatch = text.match(/╭─\s*⚕\s*Hermes\s*─+╮\n([\s\S]*?)\n╰─/g);
+    let ans = ansMatch ? ansMatch[ansMatch.length - 1].match(/╭─\s*⚕\s*Hermes\s*─+╮\n([\s\S]*?)\n╰─/) : null;
     return {
         reasoning: reas ? reas[1].trim() : null,
         answer: ans ? ans[1].trim() : text
