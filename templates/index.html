@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deimos Chat v1.0</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+:root {
+  --bg: #1a1a2e; --surface: #16213e; --text: #e0e0e0; --accent: #0f3460; --user: #1a3a5c; --ai: #16213e;
+  --border: #2a2a4a; --send: #e94560;
+}
+.light { --bg: #f0f0f5; --surface: #fff; --text: #222; --accent: #e0e0e8; --user: #d0e0ff; --ai: #fff; --border: #ccc; --send: #c0392b; }
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font: 14px/1.5 -apple-system, sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; }
+.sidebar { width: 240px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 10px; flex-shrink: 0; }
+.sidebar h2 { font-size: 14px; margin: 0 0 8px 0; color: var(--send); }
+.sidebar button { width: 100%; padding: 8px; margin-bottom: 6px; background: var(--accent); color: var(--text); border: none; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.sidebar .chat-item { padding: 8px; margin: 2px 0; border-radius: 6px; cursor: pointer; font-size: 12px; display: flex; justify-content: space-between; align-items: center; }
+.sidebar .chat-item:hover { background: var(--accent); }
+.sidebar .chat-item.active { background: var(--accent); }
+.sidebar .del-btn { background: none; border: none; color: var(--text); cursor: pointer; font-size: 14px; opacity: 0.5; padding: 0 4px; margin: 0; width: auto; }
+.main { flex: 1; display: flex; flex-direction: column; }
+.header { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; font-size: 13px; background: var(--surface); }
+.header select, .header button { padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--accent); color: var(--text); cursor: pointer; }
+.chat { flex: 1; overflow-y: auto; padding: 16px; }
+.msg { margin-bottom: 12px; padding: 8px 12px; border-radius: 8px; max-width: 85%; }
+.msg.user { background: var(--user); margin-left: auto; }
+.msg.ai { background: var(--ai); margin-right: auto; }
+.msg.ai pre { background: var(--bg); padding: 8px; border-radius: 4px; overflow-x: auto; }
+.msg.ai code { background: var(--bg); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+.msg .meta { font-size: 10px; opacity: 0.5; margin-bottom: 4px; }
+.msg .model-tag { font-size: 10px; color: var(--send); }
+.input-area { padding: 10px 16px; border-top: 1px solid var(--border); display: flex; gap: 8px; background: var(--surface); }
+.input-area input { flex: 1; padding: 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); outline: none; }
+.input-area button { padding: 10px 20px; background: var(--send); color: #fff; border: none; border-radius: 8px; cursor: pointer; }
+.spinner { display: none; text-align: center; padding: 8px; color: var(--send); font-size: 12px; }
+.spinner.show { display: block; }
+</style>
+</head>
+<body>
+<div class="sidebar">
+<h2>💬 Deimos Chat</h2>
+<button onclick="newChat()">+ Новый чат</button>
+<div id="chat-list"></div>
+<button onclick="toggleTheme()" style="margin-top:auto;">🌓 Тема</button>
+</div>
+<div class="main">
+<div class="header">
+<span id="chat-title">Выберите или создайте чат</span>
+<div>
+<select id="model-select" onchange="setModel(this.value)">
+<option value="flash">flash</option><option value="pro">pro</option>
+</select>
+<button onclick="toggleTheme()">🌓</button>
+</div>
+</div>
+<div class="chat" id="messages"><div style="text-align:center;color:#666;margin-top:40px;">Выберите чат или создайте новый</div></div>
+<div class="spinner" id="spinner">⏳ Думаю...</div>
+<div class="input-area">
+<input id="msg-input" placeholder="Сообщение... (/model, /help, /status)" onkeydown="if(event.key==='Enter')send()">
+<button onclick="send()">➤</button>
+</div>
+</div>
+<script>
+let currentChat=null, currentModel='flash';
+marked.setOptions({breaks:true,gfm:true});
+function toggleTheme(){document.body.classList.toggle('light');localStorage.setItem('theme',document.body.classList.contains('light')?'light':'dark');}
+if(localStorage.getItem('theme')==='light')document.body.classList.add('light');
+async function loadChats(){let r=await fetch('/api/chats');let chats=await r.json();let l=document.getElementById('chat-list');l.innerHTML=chats.map(c=>`<div class="chat-item${c.id===currentChat?' active':''}" onclick="openChat('${c.id}')"><span>${c.title.substring(0,18)}<br><small>${c.model}</small></span><button class="del-btn" onclick="event.stopPropagation();delChat('${c.id}')">✕</button></div>`).join('');}
+function newChat(){let title=prompt('Название чата:','Новый чат');if(!title)return;fetch('/api/chat/new',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title})}).then(r=>r.json()).then(d=>{openChat(d.id);loadChats();});}
+function openChat(cid){currentChat=cid;document.getElementById('chat-title').textContent='Чат '+cid;fetch('/api/chat/'+cid+'/messages').then(r=>r.json()).then(msgs=>{let h=document.getElementById('messages');h.innerHTML=msgs.map(m=>`<div class="msg ${m.role}"><div class="meta">${m.created||''} ${m.role==='assistant'?'<span class="model-tag">'+m.model+'</span>':''}</div><div>${m.role==='assistant'?marked.parse(m.content):m.content}</div></div>`).join('');h.scrollTop=h.scrollHeight;});loadChats();}
+function delChat(cid){if(!confirm('Удалить чат?'))return;fetch('/api/chat/'+cid+'/delete',{method:'POST'}).then(()=>{if(currentChat===cid){currentChat=null;document.getElementById('messages').innerHTML='<div style="text-align:center;color:#666;margin-top:40px;">Выберите чат или создайте новый</div>';document.getElementById('chat-title').textContent='Выберите или создайте чат';}loadChats();});}
+function setModel(m){currentModel=m;}
+async function send(){let inp=document.getElementById('msg-input');let msg=inp.value.trim();if(!msg||!currentChat)return;inp.value='';inp.disabled=true;document.getElementById('spinner').classList.add('show');
+let h=document.getElementById('messages');h.innerHTML+=`<div class="msg user"><div>${msg}</div></div>`;h.scrollTop=h.scrollHeight;
+if(msg.startsWith('/')){
+let r=await fetch('/api/chat/'+currentChat+'/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,model:currentModel})});
+let d=await r.json();h.innerHTML+=`<div class="msg ai"><div class="meta"><span class="model-tag">${d.model}</span></div><div>${marked.parse(d.reply)}</div></div>`;
+if(msg.startsWith('/model ')){let nm=msg.split(' ')[1];if(nm)setModel(nm);document.getElementById('model-select').value=nm;}
+}else{
+let r=await fetch('/api/chat/'+currentChat+'/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,model:currentModel})});
+let d=await r.json();h.innerHTML+=`<div class="msg ai"><div class="meta"><span class="model-tag">${d.model}</span></div><div>${marked.parse(d.reply)}</div></div>`;
+}
+h.scrollTop=h.scrollHeight;inp.disabled=false;document.getElementById('spinner').classList.remove('show');loadChats();
+}
+loadChats();
+</script>
+</body>
+</html>
