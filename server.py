@@ -63,6 +63,39 @@ def api_messages(cid):
     msgs = db.execute('SELECT id, role, content, model, created FROM messages WHERE chat_id=? ORDER BY id', (cid,)).fetchall()
     return jsonify([{'id': r[0], 'role': r[1], 'content': r[2], 'model': r[3], 'created': r[4]} for r in msgs])
 
+SLASH_HELP = """**Быстрые команды Deimos Chat:**
+/model flash — быстрая модель
+/model pro — мощная модель
+/help — эта справка
+/status — статус системы
+/clear — удалить чат (кнопка ✕)"""
+
+def handle_slash(msg: str, cid: str, model: str) -> str:
+    """Обработка / команд без вызова ИИ."""
+    cmd = msg.strip().lower()
+    if cmd.startswith('/help'):
+        return SLASH_HELP
+    if cmd.startswith('/status'):
+        try:
+            r = subprocess.run(['systemctl', '--user', 'is-active', 'hermes-gateway'],
+                              capture_output=True, text=True, timeout=5)
+            gw = r.stdout.strip()
+        except:
+            gw = 'unknown'
+        try:
+            r = subprocess.run(['pgrep', '-f', 'sentinel.py'], capture_output=True, text=True, timeout=5)
+            sentinel = '✅' if r.stdout.strip() else '❌'
+        except:
+            sentinel = '?'
+        return f'**Статус:** гейтвей: {gw}, sentinel: {sentinel}'
+    if cmd.startswith('/model '):
+        new_model = cmd.split()[1]
+        if new_model in ('flash', 'pro'):
+            return f'Модель переключена на **{new_model}**.'
+        return 'Доступные модели: **flash**, **pro**.'
+    # Остальные / команды — передаём Hermes
+    return None
+
 @app.route('/api/chat/<cid>/send', methods=['POST'])
 def api_chat_send(cid):
     data = request.json or {}
@@ -75,6 +108,14 @@ def api_chat_send(cid):
                (cid, 'user', msg, model))
     db.execute('UPDATE chats SET model=? WHERE id=?', (model, cid))
     db.commit()
+    # Быстрые / команды — без вызова ИИ
+    if msg.startswith('/'):
+        reply = handle_slash(msg, cid, model)
+        if reply:
+            db.execute('INSERT INTO messages (chat_id, role, content, model) VALUES (?, ?, ?, ?)',
+                       (cid, 'assistant', reply, model))
+            db.commit()
+            return jsonify({'reply': reply, 'model': model})
     reply = call_hermes(msg, model)
     db.execute('INSERT INTO messages (chat_id, role, content, model) VALUES (?, ?, ?, ?)',
                (cid, 'assistant', reply, model))
@@ -105,4 +146,4 @@ def api_status():
     return jsonify({'gateway': gw, 'sentinel': sentinel})
 
 if __name__ == '__main__':
-    app.run(host='127.0.0.1', port=8765, debug=False)
+    app.run(host='127.0.0.1', port=8765, debug=False, threaded=True)
