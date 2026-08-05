@@ -27,14 +27,14 @@ def call_hermes(msg: str, model: str = 'flash') -> str:
         r = subprocess.run(
             ['/home/deimos/.hermes/hermes-agent/venv/bin/hermes', 'chat',
              '-q', msg, '-m', f'deepseek-v4-{model}',
-             '--no-restore-cwd', '--safe-mode'],
+             '--no-restore-cwd'],
             capture_output=True, text=True, timeout=300, cwd='/home/deimos',
             env={**env, 'HOME': '/home/deimos'}
         )
         out = r.stdout.strip() or r.stderr.strip() or '...'
         # ANSI → Markdown (Hermes CLI форматирует вывод ANSI-кодами)
         import re
-        ESC = '\x1b'
+        ESC = chr(27)
         out = re.sub(ESC + r'\[1m(.*?)' + ESC + r'\[0m', r'**\1**', out, flags=re.DOTALL)
         out = re.sub(ESC + r'\[3m(.*?)' + ESC + r'\[0m', r'*\1*', out, flags=re.DOTALL)
         out = re.sub(ESC + r'\[4m(.*?)' + ESC + r'\[0m', r'_\1_', out, flags=re.DOTALL)
