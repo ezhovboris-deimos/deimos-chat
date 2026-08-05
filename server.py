@@ -32,9 +32,12 @@ def call_hermes(msg: str, model: str = 'flash') -> str:
             env={**env, 'HOME': '/home/deimos'}
         )
         out = r.stdout.strip() or r.stderr.strip() or '...'
-        # Очистка ANSI-кодов (Hermes CLI выводит терминальное форматирование)
+        # Конвертируем ANSI-форматирование в Markdown (Hermes CLI выводит ANSI вместо **)
         import re
-        out = re.sub(r'\x1b\[[0-9;]*m', '', out)
+        out = re.sub(r'\x1b\[1m(.*?)\x1b\[0m', r'**\1**', out)  # bold
+        out = re.sub(r'\x1b\[3m(.*?)\x1b\[0m', r'*\1*', out)      # italic
+        out = re.sub(r'\x1b\[4m(.*?)\x1b\[0m', r'_\1_', out)      # underline
+        out = re.sub(r'\x1b\[[0-9;]*m', '', out)                   # остальные ANSI
         return out[:8000]
     except subprocess.TimeoutExpired:
         return '⏳ Ответ занимает больше 5 минут. Упростите запрос или переключитесь на flash.'
