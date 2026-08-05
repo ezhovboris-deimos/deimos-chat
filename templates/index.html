@@ -3,8 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Deimos Chat v1.0</title>
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<title>Deimos Chat v1.1</title>
 <style>
 :root {
   --bg: #1a1a2e; --surface: #16213e; --text: #e0e0e0; --accent: #0f3460; --user: #1a3a5c; --ai: #16213e;
@@ -81,14 +80,26 @@ marked.setOptions({breaks:true,gfm:true});
 function toggleTheme(){document.body.classList.toggle('light');localStorage.setItem('theme',document.body.classList.contains('light')?'light':'dark');}
 if(localStorage.getItem('theme')==='light')document.body.classList.add('light');
 
+function renderMarkdown(text) {
+    /* Простая конвертация Markdown в HTML */
+    let h = text;
+    h = h.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>');
+    h = h.replace(/\*(.*?)\*/g, '<i>$1</i>');
+    h = h.replace(/_(.*?)_/g, '<u>$1</u>');
+    h = h.replace(/`(.*?)`/g, '<code>$1</code>');
+    h = h.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
+    h = h.replace(/^- (.*)/gm, '• $1');
+    h = h.replace(/^> (.*)/gm, '« $1»');
+    h = h.replace(/\n/g, '<br>');
+    return h;
+}
 function formatMsg(parts) {
-    /* Парсинг Reasoning + Ответ. parts.reasoning — текст Reasoning, parts.answer — ответ */
     let html = '';
     if (parts.reasoning) {
         html += '<details class="reasoning"><summary>🧠 Reasoning</summary><div>'
-              + marked.parse(parts.reasoning) + '</div></details>';
+              + renderMarkdown(parts.reasoning) + '</div></details>';
     }
-    html += '<div>' + marked.parse(parts.answer) + '</div>';
+    html += '<div>' + renderMarkdown(parts.answer) + '</div>';
     return html;
 }
 function parseResponse(text) {
