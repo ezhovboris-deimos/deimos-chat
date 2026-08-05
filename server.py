@@ -27,14 +27,15 @@ def call_hermes(msg: str, model: str = 'flash') -> str:
         r = subprocess.run(
             ['/home/deimos/.hermes/hermes-agent/venv/bin/hermes', 'chat',
              '-q', msg, '-m', f'deepseek-v4-{model}',
-             '--no-restore-cwd'],
+             '--no-restore-cwd', '--reasoning', 'medium'],
             capture_output=True, text=True, timeout=300, cwd='/home/deimos',
             env={**env, 'HOME': '/home/deimos'}
         )
         out = r.stdout.strip() or r.stderr.strip() or '...'
-        # Фильтр: показывать только блок от Hermes (╭─ ⚕ Hermes ─), без Reasoning
-        cleaned = _clean_hermes_output(out)
-        return cleaned[:8000]
+        # Очистка ANSI-кодов (Hermes CLI выводит терминальное форматирование)
+        import re
+        out = re.sub(r'\x1b\[[0-9;]*m', '', out)
+        return out[:8000]
     except subprocess.TimeoutExpired:
         return '⏳ Ответ занимает больше 5 минут. Упростите запрос или переключитесь на flash.'
     except Exception as e:
