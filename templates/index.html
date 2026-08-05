@@ -104,8 +104,10 @@ function insertMarkdown(prefix, suffix) {
     let inp = document.getElementById('msg-input');
     let s = inp.selectionStart, e = inp.selectionEnd;
     let t = inp.value, sel = t.substring(s, e);
+    if (!sel) sel = 'текст';
     inp.value = t.substring(0, s) + prefix + sel + suffix + t.substring(e);
-    inp.focus(); inp.setSelectionRange(s+prefix.length, s+prefix.length+sel.length);
+    let newPos = s + prefix.length;
+    inp.focus(); inp.setSelectionRange(newPos, newPos + sel.length);
 }
 async function loadChats(){let r=await fetch('/api/chats');let chats=await r.json();let l=document.getElementById('chat-list');l.innerHTML=chats.map(c=>`<div class="chat-item${c.id===currentChat?' active':''}" onclick="openChat('${c.id}')"><span>${c.title.substring(0,18)}<br><small>${c.model}</small></span><button class="del-btn" onclick="event.stopPropagation();delChat('${c.id}')">✕</button></div>`).join('');}
 function newChat(){let title=prompt('Название чата:','Новый чат');if(!title)return;fetch('/api/chat/new',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title})}).then(r=>r.json()).then(d=>{openChat(d.id);loadChats();});}
