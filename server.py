@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Deimos Chat v1.0 — локальный веб-чат Hermes."""
+"""Deimos Chat v1.2 — мульти-ходовый веб-чат Hermes (через -q --resume)."""
 import json, os, sqlite3, uuid, time, re, subprocess
 from datetime import datetime
-from flask import Flask, render_template, request, jsonify, session
+from flask import Flask, render_template, request, jsonify
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24).hex()
 DB = os.path.join(os.path.dirname(__file__), 'chats.db')
+HERMES = '/home/deimos/.hermes/hermes-agent/venv/bin/hermes'
+RESUME_LOCK = {}  # {chat_id: threading.Lock}
 
 def get_db():
     db = sqlite3.connect(DB)
     db.execute('''CREATE TABLE IF NOT EXISTS chats (
         id TEXT PRIMARY KEY, title TEXT, model TEXT DEFAULT 'flash',
-        created DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+        session_id TEXT, created DATETIME DEFAULT CURRENT_TIMESTAMP)''')
     db.execute('''CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT,
         role TEXT, content TEXT, model TEXT,
@@ -20,46 +22,57 @@ def get_db():
     db.commit()
     return db
 
-def call_hermes(msg: str, model: str = 'flash') -> str:
-    """Вызов Hermes через CLI (полный агент: скиллы, память, инструменты)."""
-    env = os.environ.copy()
-    try:
-        r = subprocess.run(
-            ['/home/deimos/.hermes/hermes-agent/venv/bin/hermes', 'chat',
-             '-q', msg, '-m', f'deepseek-v4-{model}',
-             '--no-restore-cwd'],
-            capture_output=True, text=True, timeout=300, cwd='/home/deimos',
-            env={**env, 'HOME': '/home/deimos'}
-        )
-        out = r.stdout.strip() or r.stderr.strip() or '...'
-        # ANSI → Markdown (Hermes CLI форматирует вывод ANSI-кодами)
-        import re
-        ESC = chr(27)
-        out = re.sub(ESC + r'\[1m(.*?)' + ESC + r'\[0m', r'**\1**', out, flags=re.DOTALL)
-        out = re.sub(ESC + r'\[3m(.*?)' + ESC + r'\[0m', r'*\1*', out, flags=re.DOTALL)
-        out = re.sub(ESC + r'\[4m(.*?)' + ESC + r'\[0m', r'_\1_', out, flags=re.DOTALL)
-        out = re.sub(ESC + r'\[[0-9;]*m', '', out)
-        return out[:8000]
-    except subprocess.TimeoutExpired:
-        return '⏳ Ответ занимает больше 5 минут. Упростите запрос или переключитесь на flash.'
-    except Exception as e:
-        return f'Ошибка: {e}'
+def _clean_ansi(text: str) -> str:
+    ESC = chr(27)
+    text = re.sub(ESC + r'\[1m(.*?)' + ESC + r'\[0m', r'**\1**', text, flags=re.DOTALL)
+    text = re.sub(ESC + r'\[3m(.*?)' + ESC + r'\[0m', r'*\1*', text, flags=re.DOTALL)
+    text = re.sub(ESC + r'\[4m(.*?)' + ESC + r'\[0m', r'_\1_', text, flags=re.DOTALL)
+    text = re.sub(ESC + r'\[[0-9;]*m', '', text)
+    return text
 
-def _clean_hermes_output(text: str) -> str:
-    """Оставляем только блок ╭─ ⚕ Hermes ─ (ответ агента), убираем Reasoning и технический вывод."""
-    import re
-    # Ищем блок Hermes (между ╭─ ⚕ Hermes ─ и ╰─)
-    m = re.search(r'╭─\s*⚕\s*Hermes\s*─+╮\n(.*?)\n╰─', text, re.DOTALL)
-    if m:
-        return m.group(1).strip()
-    # Если не нашли — отдаём всё что есть после "Initializing agent..."
+def _extract_session_id(output: str) -> str | None:
+    m = re.search(r'hermes --resume (\S+)', output)
+    return m.group(1) if m else None
+
+def _extract_answer(text: str) -> str:
+    """Извлекает финальный ответ."""
+    blocks = re.findall(r'╭─\s*⚕\s*Hermes\s*─+╮\n(.*?)\n╰─', text, re.DOTALL)
+    if blocks:
+        return _clean_ansi(blocks[-1].strip())
     lines = text.split('\n')
-    start = 0
     for i, line in enumerate(lines):
         if 'Initializing agent...' in line:
-            start = i + 1
-    body = '\n'.join(lines[start:])
-    return body.strip() or text[:1500]
+            return _clean_ansi('\n'.join(lines[i+1:]).strip())
+    return _clean_ansi(text[:1500])
+
+def call_hermes(msg: str, model: str, session_id: str | None = None) -> tuple[str, str | None]:
+    """Вызов hermes chat -q --resume. Возвращает (ответ, новый session_id)."""
+    env = os.environ.copy()
+    cmd = [HERMES, 'chat', '-q', msg, '-m', f'deepseek-v4-{model}', '--no-restore-cwd']
+    if session_id:
+        cmd.extend(['--resume', session_id])
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=180,
+                          cwd='/home/deimos', env={**env, 'HOME': '/home/deimos'})
+        out = r.stdout.strip() or r.stderr.strip() or '...'
+        new_sid = _extract_session_id(out)
+        answer = _extract_answer(out)
+        if not answer or len(answer) < 3:
+            answer = _clean_ansi(out[:1500])
+        return answer[:8000], new_sid
+    except subprocess.TimeoutExpired:
+        return '⏳ Ответ занимает больше 3 мин. Упростите запрос.', session_id
+    except Exception as e:
+        return f'Ошибка: {e}', session_id
+
+import threading
+
+def _get_lock(cid):
+    if cid not in RESUME_LOCK:
+        RESUME_LOCK[cid] = threading.Lock()
+    return RESUME_LOCK[cid]
+
+# ── API ──────────────────────────────────────────────────────────────
 
 @app.route('/')
 def index():
@@ -91,32 +104,27 @@ SLASH_HELP = """**Быстрые команды Deimos Chat:**
 /model pro — мощная модель
 /help — эта справка
 /status — статус системы
-/clear — удалить чат (кнопка ✕)"""
+/new — сбросить сессию (новый контекст)"""
 
-def handle_slash(msg: str, cid: str, model: str) -> str:
-    """Обработка / команд без вызова ИИ."""
+def handle_slash(msg: str, cid: str, model: str) -> str | None:
     cmd = msg.strip().lower()
     if cmd.startswith('/help'):
         return SLASH_HELP
     if cmd.startswith('/status'):
         try:
-            r = subprocess.run(['systemctl', '--user', 'is-active', 'hermes-gateway'],
-                              capture_output=True, text=True, timeout=5)
+            r = subprocess.run(['systemctl', '--user', 'is-active', 'hermes-gateway'], capture_output=True, text=True, timeout=5)
             gw = r.stdout.strip()
-        except:
-            gw = 'unknown'
-        try:
-            r = subprocess.run(['pgrep', '-f', 'sentinel.py'], capture_output=True, text=True, timeout=5)
-            sentinel = '✅' if r.stdout.strip() else '❌'
-        except:
-            sentinel = '?'
-        return f'**Статус:** гейтвей: {gw}, sentinel: {sentinel}'
+        except: gw = 'unknown'
+        return f'**Статус:** гейтвей: {gw}'
     if cmd.startswith('/model '):
         new_model = cmd.split()[1]
         if new_model in ('flash', 'pro'):
             return f'Модель переключена на **{new_model}**.'
-        return 'Доступные модели: **flash**, **pro**.'
-    # Остальные / команды — передаём Hermes
+    if cmd.startswith('/new'):
+        db = get_db()
+        db.execute('UPDATE chats SET session_id=NULL WHERE id=?', (cid,))
+        db.commit()
+        return 'Сессия сброшена. Новый контекст.'
     return None
 
 @app.route('/api/chat/<cid>/send', methods=['POST'])
@@ -126,12 +134,13 @@ def api_chat_send(cid):
     model = data.get('model', 'flash')
     if not msg:
         return jsonify({'error': 'empty'}), 400
+
     db = get_db()
     db.execute('INSERT INTO messages (chat_id, role, content, model) VALUES (?, ?, ?, ?)',
                (cid, 'user', msg, model))
     db.execute('UPDATE chats SET model=? WHERE id=?', (model, cid))
     db.commit()
-    # Быстрые / команды — без вызова ИИ
+
     if msg.startswith('/'):
         reply = handle_slash(msg, cid, model)
         if reply:
@@ -139,7 +148,15 @@ def api_chat_send(cid):
                        (cid, 'assistant', reply, model))
             db.commit()
             return jsonify({'reply': reply, 'model': model})
-    reply = call_hermes(msg, model)
+
+    with _get_lock(cid):
+        row = db.execute('SELECT session_id FROM chats WHERE id=?', (cid,)).fetchone()
+        sid = row[0] if row else None
+        reply, new_sid = call_hermes(msg, model, sid)
+        if new_sid:
+            db.execute('UPDATE chats SET session_id=? WHERE id=?', (new_sid, cid))
+            db.commit()
+
     db.execute('INSERT INTO messages (chat_id, role, content, model) VALUES (?, ?, ?, ?)',
                (cid, 'assistant', reply, model))
     db.commit()
@@ -156,17 +173,10 @@ def api_chat_delete(cid):
 @app.route('/api/status')
 def api_status():
     try:
-        r = subprocess.run(['systemctl', '--user', 'is-active', 'hermes-gateway'],
-                          capture_output=True, text=True, timeout=5)
+        r = subprocess.run(['systemctl', '--user', 'is-active', 'hermes-gateway'], capture_output=True, text=True, timeout=5)
         gw = r.stdout.strip()
-    except:
-        gw = 'unknown'
-    try:
-        r = subprocess.run(['pgrep', '-f', 'sentinel.py'], capture_output=True, text=True, timeout=5)
-        sentinel = 'active' if r.stdout.strip() else 'inactive'
-    except:
-        sentinel = 'unknown'
-    return jsonify({'gateway': gw, 'sentinel': sentinel})
+    except: gw = 'unknown'
+    return jsonify({'gateway': gw})
 
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=8765, debug=False, threaded=True)
